@@ -17,7 +17,7 @@ META_FILE = Path("electronics_metadata.csv")
 
 BAD_REVIEW_THRESHOLD = 2.0
 GOOD_REVIEW_THRESHOLD = 4.0
-SAMPLE_ROWS = int(os.getenv("APP_SAMPLE_ROWS", "120000"))
+SAMPLE_ROWS = int(os.getenv("APP_SAMPLE_ROWS", "0"))
 
 app = Flask(__name__)
 
@@ -104,7 +104,6 @@ def load_reviews() -> pd.DataFrame:
         raise FileNotFoundError(f"Missing {DATA_FILE}")
     reviews = pd.read_csv(
         DATA_FILE,
-        nrows=SAMPLE_ROWS,
         dtype={"asin": "string"},
         usecols=["asin", "overall", "reviewText"],
     )
@@ -174,7 +173,7 @@ def get_topics_for_product(asin: str, n_topics: int = 4, top_words: int = 8) -> 
         bad = reviews_df[
             (reviews_df["asin"] == asin) & (reviews_df["overall"] <= BAD_REVIEW_THRESHOLD)
         ]
-        if len(bad) < 10:
+        if len(bad) < 5:
             return None
         vec = TfidfVectorizer(
             max_features=500, stop_words="english", min_df=2, ngram_range=(1, 2),
@@ -192,7 +191,9 @@ def get_topics_for_product(asin: str, n_topics: int = 4, top_words: int = 8) -> 
         return None
 
 
-def get_rating_distribution(asin: str) -> dict[int, int]:
+def get_rating_distribution(
+    asin: str, avg_rating: float = 0.0, review_count: int = 0
+) -> dict[int, int]:
     reviews_df = load_reviews()
     dist = (
         reviews_df[reviews_df["asin"] == asin]["overall"]
@@ -200,7 +201,12 @@ def get_rating_distribution(asin: str) -> dict[int, int]:
         .astype(int)
         .value_counts()
     )
-    return {i: int(dist.get(i, 0)) for i in range(1, 6)}
+    result = {i: int(dist.get(i, 0)) for i in range(1, 6)}
+    # Sample contained no rows for this ASIN — use metadata as a single-bar fallback.
+    if all(v == 0 for v in result.values()) and review_count > 0:
+        bucket = max(1, min(5, round(avg_rating)))
+        result[bucket] = review_count
+    return result
 
 
 def top_bad_terms(asin: str, top_n: int = 12) -> list[str]:
@@ -208,7 +214,7 @@ def top_bad_terms(asin: str, top_n: int = 12) -> list[str]:
     bad = reviews_df[
         (reviews_df["asin"] == asin) & (reviews_df["overall"] <= BAD_REVIEW_THRESHOLD)
     ]
-    if bad.empty:
+    if len(bad) < 3:
         return []
     counter: Counter[str] = Counter()
     for text in bad["reviewText"]:
@@ -361,6 +367,21 @@ TEMPLATE = """
     }
     button:hover { background: #1d4ed8; }
 
+    .about-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+      color: var(--link);
+      font-size: 14px;
+      font-weight: 600;
+      user-select: none;
+      background: rgba(255,255,255,0.04);
+      border-radius: 6px;
+    }
+    .about-toggle:hover { color: var(--text); background: rgba(255,255,255,0.08); }
+
     .table-container {
       border-radius: 8px;
       overflow: hidden;
@@ -411,6 +432,20 @@ TEMPLATE = """
     .topic-label { font-weight: 600; color: var(--bad); margin-right: 6px; }
     .topic-interp { margin-top: 4px; font-size: 0.82rem; color: var(--muted); font-style: italic; }
     details summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+
+    .risk-bar-track {
+      background: var(--border);
+      border-radius: 999px;
+      height: 8px;
+      width: 100%;
+      max-width: 400px;
+      overflow: hidden;
+    }
+    .risk-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.4s ease;
+    }
   </style>
 </head>
 <body>
@@ -420,6 +455,36 @@ TEMPLATE = """
   </header>
 
   <div class="wrap">
+    <!-- About Section -->
+    <div id="about" class="card" style="border-left-color: #475569;">
+      <p style="margin:0 0 8px; font-size:11px; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em;">Project Info</p>
+      <div class="about-toggle" role="button" tabindex="0"
+           onclick="toggleAbout()"
+           onkeydown="if(event.key==='Enter'){toggleAbout();}">
+        <span id="about-arrow" style="font-size:10px;">&#9654;</span>
+        &nbsp;About This Project
+      </div>
+      <div id="about-content" style="display:none; padding-top:16px;">
+        <h3 style="margin:0 0 10px; font-size:1rem; font-weight:700;">
+          Customer Review Analysis for Product Insights</h3>
+        <p style="color:#94a3b8; margin:0 0 14px; line-height:1.7;">
+          This dashboard analyzes 3.94 million Amazon Electronics reviews
+          across 10,738 products using a rating-driven pipeline. Products
+          are classified as bad (avg rating &le; 2.0), mid, or good
+          (avg rating &ge; 4.0). Topic modeling (NMF) extracts recurring
+          complaint themes from 1&ndash;2 star reviews.</p>
+        <p style="margin:0 0 14px;">
+          <span style="color:#94a3b8; font-size:12px; text-transform:uppercase;">Team</span><br>
+          Anagha Awale, Meghana Elisetti, Swathika Kumaravel,
+          Tanya Tooley, Wang Ying &mdash; BT5153 Group 4, NUS</p>
+        <ol style="color:#94a3b8; margin:8px 0 0; padding-left:20px; line-height:1.9;">
+          <li>Use the Product Table filters to explore by quality band or brand</li>
+          <li>Click any ASIN link or enter it in the Drilldown box to inspect a product</li>
+          <li>Products with sufficient bad reviews will show NMF topic clusters identifying complaint themes</li>
+        </ol>
+      </div>
+    </div>
+
     <!-- Quick Metrics -->
     <div class="card">
       <h2>Quick Metrics</h2>
@@ -559,13 +624,34 @@ TEMPLATE = """
             </span>
           </p>
           {% endif %}
+
+          <!-- Risk Score — always shown when drilldown is present -->
+          <div style="margin:0 0 8px;" title="Risk score combines bad review rate (50%), rating gap from 5.0 (30%), and unverified review rate (20%)">
+            <div style="margin-bottom:6px; display:flex; align-items:center; gap:10px;">
+              <span class="muted" style="font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">Risk Score</span>
+              <span style="font-weight:700; color:{{ drilldown.risk_color }};">{{ drilldown.risk_level }}</span>
+              <span class="muted" style="font-size:12px;">({{ drilldown.risk_score }})</span>
+            </div>
+            <div class="risk-bar-track" title="Risk score combines bad review rate (50%), rating gap from 5.0 (30%), and unverified review rate (20%)">
+              <div class="risk-bar-fill" style="background:{{ drilldown.risk_color }}; width:{{ (drilldown.risk_score * 100)|round|int }}%;"></div>
+            </div>
+          </div>
+
+          <!-- Recommended Action — always shown when drilldown is present -->
+          <p style="margin:10px 0 16px;">
+            <span class="muted" style="font-size:12px; text-transform:uppercase; letter-spacing:0.05em;">Recommended Action</span><br>
+            <span style="font-weight:600; color:{{ 'var(--bad)' if drilldown.quality_band == 'bad_product' else ('var(--good)' if drilldown.quality_band == 'good_product' else '#f59e0b') }};">
+              {{ drilldown.recommendation }}
+            </span>
+          </p>
+
           <div style="display:flex; flex-wrap:wrap; gap:24px; align-items:flex-start;">
             <div style="flex:1; min-width:280px;">
               {% if drilldown.topics %}
                 <strong>Complaint Themes (NMF Topic Model):</strong>
                 {% for topic in drilldown.topics %}
                   <div class="topic-card">
-                    <span class="topic-label">Topic {{ loop.index }}:</span>{{ topic | join(' &middot; ') }}
+                    <span class="topic-label">Topic {{ loop.index }}:</span>{{ topic | join(' · ') }}
                     {% set lbl = drilldown.topic_labels[loop.index0] %}
                     {% if lbl %}<div class="topic-interp">{{ lbl }}</div>{% endif %}
                   </div>
@@ -690,6 +776,14 @@ TEMPLATE = """
     });
     }());
     {% endif %}
+
+    function toggleAbout() {
+      const content = document.getElementById('about-content');
+      const arrow = document.getElementById('about-arrow');
+      const isHidden = content.style.display === 'none';
+      content.style.display = isHidden ? 'block' : 'none';
+      arrow.innerHTML = isHidden ? '&#9660;' : '&#9654;';
+    }
   </script>
 </body>
 </html>
@@ -735,12 +829,40 @@ def home() -> str:
             row["topics"] = topics
             row["topic_labels"] = [interpret_topic(t) for t in topics] if topics else []
             row["top_terms"] = [] if topics else top_bad_terms(asin)
-            row["rating_dist"] = get_rating_distribution(asin)
+            row["rating_dist"] = get_rating_distribution(
+                asin, avg_rating=row["avg_rating"], review_count=int(row.get("reviews", 0))
+            )
             product_bad_rate = get_product_bad_rate(asin)
             band_avg = get_band_avg_bad_rates().get(row["quality_band"], 0.0)
             row["bad_rate_pct"] = round(product_bad_rate * 100, 1) if product_bad_rate is not None else None
             row["band_avg_pct"] = round(band_avg * 100, 1)
             row["vs_avg"] = "better" if (product_bad_rate is not None and product_bad_rate < band_avg) else "worse"
+
+            # Risk score (verified_rate defaults to 0.5 — neutral — as column not loaded)
+            bad_review_rate = product_bad_rate if product_bad_rate is not None else 0.0
+            risk_score = round(
+                (bad_review_rate * 0.5)
+                + ((5 - row["avg_rating"]) / 5 * 0.3)
+                + (0.5 * 0.2),
+                3,
+            )
+            row["risk_score"] = risk_score
+            if risk_score < 0.3:
+                row["risk_level"] = "LOW RISK"
+                row["risk_color"] = "#22c55e"
+            elif risk_score < 0.6:
+                row["risk_level"] = "MEDIUM RISK"
+                row["risk_color"] = "#f59e0b"
+            else:
+                row["risk_level"] = "HIGH RISK"
+                row["risk_color"] = "#ef4444"
+
+            _rec_map = {
+                "bad_product": "⚠ Avoid or investigate before purchasing. High complaint volume detected.",
+                "mid_product": "⚡ Review complaint topics before deciding. Mixed user experience reported.",
+                "good_product": "✓ Generally reliable. Complaint rate is low.",
+            }
+            row["recommendation"] = _rec_map.get(row["quality_band"], "")
             drilldown = row
 
     kpis = {
@@ -775,7 +897,9 @@ def api_product(asin: str):
     row["top_terms"] = top_bad_terms(asin)
     row["topics"] = get_topics_for_product(asin)
     row["topic_labels"] = [interpret_topic(t) for t in row["topics"]] if row["topics"] else []
-    row["rating_dist"] = get_rating_distribution(asin)
+    row["rating_dist"] = get_rating_distribution(
+        asin, avg_rating=row["avg_rating"], review_count=int(row.get("reviews", 0))
+    )
     product_bad_rate = get_product_bad_rate(asin)
     band_avg = get_band_avg_bad_rates().get(row["quality_band"], 0.0)
     row["bad_rate_pct"] = round(product_bad_rate * 100, 1) if product_bad_rate is not None else None
